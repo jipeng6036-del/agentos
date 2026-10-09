@@ -16,7 +16,7 @@ jobs:
           - label: baseline
             ref: a5f0d51b9678e2e50313b3317fb1d7685ae32e55
           - label: fix
-            ref: 0196fb6c2e2a33ac4c354fe930636ee618840169
+            ref: 2e7f20db939af98d1282fa606eea0619d96476f7
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -78,7 +78,7 @@ jobs:
       - name: Verify four regressions fail on the pristine baseline
         if: matrix.label == 'baseline'
         run: |
-          git fetch origin 0196fb6c2e2a33ac4c354fe930636ee618840169
+          git fetch origin 2e7f20db939af98d1282fa606eea0619d96476f7
           mkdir -p src/core/config/__tests__
           git show FETCH_HEAD:src/core/config/__tests__/AgentOSConfig.providers.test.ts > src/core/config/__tests__/AgentOSConfig.providers.test.ts
           set +e
