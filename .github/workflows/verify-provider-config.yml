@@ -1,0 +1,108 @@
+name: Verify provider configuration
+on:
+  push:
+    branches: [verify/provider-config]
+permissions:
+  contents: read
+jobs:
+  checks:
+    name: ${{ matrix.label }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: baseline
+            ref: a5f0d51b9678e2e50313b3317fb1d7685ae32e55
+          - label: fix
+            ref: 0196fb6c2e2a33ac4c354fe930636ee618840169
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: ci_test_password
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      AGENTOS_TEST_POSTGRES_URL: postgresql://postgres:ci_test_password@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ matrix.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build
+        run: pnpm run build
+      - name: Verify package exports
+        run: pnpm run verify:exports
+      - name: Verify the built QuickJS executor
+        run: |
+          node --input-type=module -e "
+          import { QuickJSExecutor } from './dist/cognition/emergent/executor/QuickJSExecutor.js';
+          const executor = await QuickJSExecutor.create();
+          const ran = await executor.run({ code: 'function execute(input) { return input.a + input.b; }', input: { a: 2, b: 3 }, globals: {}, timeoutMs: 2000, memoryMB: 16 });
+          if (ran.status !== 'ok' || ran.output !== 5) { console.error(ran); process.exit(1); }
+          console.log(ran.status, ran.output);
+          "
+      - name: Lint
+        run: pnpm run lint
+      - name: Typecheck
+        run: pnpm run typecheck
+      - name: Entire suite with coverage and Postgres
+        run: pnpm exec vitest run --coverage --reporter=default --reporter=json --outputFile=test-results.json
+      - name: Batch-1 gated tests
+        run: >-
+          pnpm vitest run
+          src/core/llm/providers/__tests__/openai-cache-params.test.ts
+          src/core/llm/providers/__tests__/default-judge.test.ts
+          src/core/llm/providers/__tests__/openai-streaming-usage.test.ts
+          src/core/llm/providers/implementations/__tests__/openai-typed-cache-options.test.ts
+          src/api/__tests__/observability.genai.test.ts
+          src/api/__tests__/inclusive-input-tokens.test.ts
+          src/api/__tests__/hitl.llmJudge.test.ts
+          src/cognition/emergent/__tests__/decay-for-agent.test.ts
+          src/cognition/emergent/__tests__/adapt-personality.test.ts
+          src/cognition/rag/__tests__/neo4j-graphrag-export.test.ts
+      - name: Verify four regressions fail on the pristine baseline
+        if: matrix.label == 'baseline'
+        run: |
+          git fetch origin 0196fb6c2e2a33ac4c354fe930636ee618840169
+          mkdir -p src/core/config/__tests__
+          git show FETCH_HEAD:src/core/config/__tests__/AgentOSConfig.providers.test.ts > src/core/config/__tests__/AgentOSConfig.providers.test.ts
+          set +e
+          pnpm exec vitest run src/core/config/__tests__/AgentOSConfig.providers.test.ts --reporter=default --reporter=json --outputFile=regression-before.json
+          result=$?
+          set -e
+          test "$result" -eq 1
+          python - <<'PY'
+          import json
+          with open('regression-before.json') as stream:
+              result = json.load(stream)
+          assert result['numTotalTests'] == 4 and result['numFailedTests'] == 4
+          assertions = [a for suite in result['testResults'] for a in suite['assertionResults']]
+          assert len(assertions) == 4 and all(a['status'] == 'failed' for a in assertions)
+          messages = [' '.join(a['failureMessages']) for a in assertions]
+          assert sum('expected undefined' in message for message in messages) == 3
+          assert any('60000' in message and '120000' in message for message in messages)
+          print('All four regressions expose the original model/timeout configuration bugs.')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: provider-config-${{ matrix.label }}
+          path: |
+            test-results.json
+            regression-before.json
+            coverage/coverage-summary.json
