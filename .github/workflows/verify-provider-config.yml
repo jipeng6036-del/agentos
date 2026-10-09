@@ -60,8 +60,8 @@ jobs:
         run: pnpm run lint
       - name: Typecheck
         run: pnpm run typecheck
-      - name: Entire suite with coverage and Postgres
-        run: pnpm exec vitest run --coverage --reporter=default --reporter=json --outputFile=test-results.json
+      - name: Entire suite with the CI argument layout and Postgres
+        run: pnpm run test --reporter=default --reporter=json --outputFile=test-results.json -- --coverage
       - name: Batch-1 gated tests
         run: >-
           pnpm vitest run
